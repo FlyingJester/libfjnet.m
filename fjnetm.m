@@ -2,6 +2,7 @@
 :- interface.
 
 :- type fjnetm.socket.
+:- type fjnetm.socket_set.
 
 :- type fjnetm.error ---> 
     ok
@@ -16,6 +17,7 @@
 :- import_module io.
 :- import_module maybe.
 :- import_module bool.
+:- import_module list.
 
 :- pred fjnetm.create_socket(fjnetm.socket::uo, io::di, io::uo) is det.
 :- pred fjnetm.destroy_socket(fjnetm.socket::in, io::di, io::uo) is det.
@@ -35,6 +37,14 @@
 :- pred fjnetm.read(fjnetm.socket::in, string::uo, Err::out, io::di, io::uo) is det.
 :- pred fjnetm.write(fjnetm.socket::in, string::in, Err::out, io::di, io::uo) is det.
 
+:- pred fjnetm.poll(list(fjnetm.socket)::in, io::di, io::uo) is det.
+
+:- pred fjnetm.create_socket_set(fjnetm.socket_set::uo, io::di, io::uo) is det.
+:- pred fjnetm.add_socket_to_set(fjnetm.socket::in, fjnetm.socket_set::di,  fjnetm.socket_set::uo, io::di, io::uo) is det.
+:- pred fjnetm.destroy_socket_set(fjnetm.socket_set::in, io::di, io::uo) is det.
+
+:- pred fjnetm.poll_set(fjnetm.socket_set::in, io::di, io::uo) is det.
+
 :- implementation.
 
 :- import_module bool.
@@ -44,6 +54,7 @@
 :- func fjnetm.accept_socket(fjnetm.socket::in, io::di, io::uo) = (fjnetm.socket::uo) is det.
 
 :- pragma foreign_decl("C", "#include <libfjnet/socket.h>").
+:- pragma foreign_decl("C", "#include <libfjnet/poll.h>").
 
 :- pragma foreign_enum("C", fjnetm.error/0,
     [
@@ -59,6 +70,20 @@
 ).
 
 :- pragma foreign_type("C", fjnetm.socket, "struct WSocket *").
+:- pragma foreign_type("C", fjnetm.socket_set, "struct SocketSet *").
+
+:- func fjnetm.through_set(fjnetm.socket_set::di) = (fjnetm.socket_set::uo) is det.
+:- pred fjnetm.through_set(fjnetm.socket_set::di, fjnetm.socket_set::uo) is det.
+
+
+fjnetm.through_set(In, fjnetm.through_set(In)).
+
+:- pragma foreign_proc("C", fjnetm.through_set(In::di) = (Out::uo),
+    [will_not_call_mercury, promise_pure],
+    "
+        In = Out;
+    ").
+
 
 :- pragma foreign_proc("C", socket_is_valid(Socket::di, SocketOut::uo, IO_in::di, IO_out::uo) = (Bool::uo),
     [will_not_call_mercury, promise_pure],
@@ -136,7 +161,10 @@ fjnetm.accept_socket(Socket::in, NewSocket::uo, IO_in::di, IO_out::uo) :-
         {
             char *temp = NULL;
             Err = Read_Socket(Socket, &temp);
-            String = temp;
+            if(temp!=NULL)
+                String = MR_copy_string(temp);
+            else
+                String = MR_copy_string(&temp);
         }
     ").
 
@@ -148,7 +176,50 @@ fjnetm.accept_socket(Socket::in, NewSocket::uo, IO_in::di, IO_out::uo) :-
         Err = Write_Socket(Socket, String);
     ").
 
-%unsigned long Length_Socket(struct WSocket *aSocket);
 
-%enum WSockErr Connect_Socket(struct WSocket *aSocket, const char *aTo,
-%                             unsigned long aPortNum, long timeout);
+:- pred fjnetm.add_list_of_sockets(list(fjnetm.socket)::in, fjnetm.socket_set::di, fjnetm.socket_set::uo, io::di, io::uo) is det.
+
+fjnetm.add_list_of_sockets(List, !Set, !IO) :-
+    (
+        List = [],
+        fjnetm.through_set(!Set)
+    ;
+        List = [That | NextList],
+        fjnetm.add_socket_to_set(That, !Set, !IO),
+        fjnetm.add_list_of_sockets(NextList, !Set, !IO)
+    ).
+
+fjnetm.poll(List, !IO) :-
+    fjnetm.create_socket_set(InitSet, !IO),
+    fjnetm.add_list_of_sockets(List, InitSet, FilledSet, !IO),
+    fjnetm.poll_set(FilledSet, !IO),
+    fjnetm.destroy_socket_set(FilledSet, !IO).
+
+:- pragma foreign_proc("C", fjnetm.create_socket_set(Set::uo, IO_in::di, IO_out::uo),
+    [will_not_call_mercury, promise_pure],
+    "
+        IO_out = IO_in;
+        Set = GenerateSocketSet(NULL, 0);
+    ").
+
+:- pragma foreign_proc("C", fjnetm.add_socket_to_set(Socket::in, Set_in::di, Set_out::uo, IO_in::di, IO_out::uo),
+    [will_not_call_mercury, promise_pure],
+    "
+        IO_out  = IO_in;
+        Set_out = Set_in;
+        AddToSet(Socket, Set_out);
+    ").
+    
+:- pragma foreign_proc("C", fjnetm.destroy_socket_set(Set::in, IO_in::di, IO_out::uo),
+    [will_not_call_mercury, promise_pure],
+    "
+        IO_out = IO_in;
+        FreeSocketSet(Set);
+    ").
+        
+:- pragma foreign_proc("C", fjnetm.poll_set(Set::in, IO_in::di, IO_out::uo),
+    [will_not_call_mercury, promise_pure],
+    "
+        IO_out = IO_in;
+        PollSet(eRead, Set, 0);
+    ").

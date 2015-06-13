@@ -1,0 +1,3 @@
+[submodule "libfjnet"]
+	path = libfjnet
+	url = https://github.com/FlyingJester/libfjnet.git
